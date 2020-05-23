@@ -1,0 +1,472 @@
+---
+output:
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 1. Synopsis
+
+
+#### **Problem Statement**
+
+Consulting for a real estate company that has a niche in purchasing properties to rent out short-term as part of their business model specifically within New York City, build a Data Product to facilitate the organization in taking decisions on properties that are profitable to invest.
+
+
+#### **Implementation**
+
+  * First fetch the data and do a quality check.
+  
+  * We have two datasets, after cleaning the data and deciding on which all variables to be used for analysis merge the dataset.
+  
+  * Analyse the data to fetch valuable information to facilitate decision making process of the organization.
+  
+  * Build an R shiny application to consolidate the visualizations for better and scalable decision making. 
+
+## 2. Packages Required
+```{r,include=FALSE,warning=FALSE}
+# Call the config file to initiate parameters
+source("UsConfig.R")
+
+# Load missing packages
+load_install <- packages_used %in% installed.packages()
+if(length(packages_used[!load_install]) > 0) install.packages(packages_used[!load_install],repos = "http://cran.us.r-project.org")
+lapply(packages_used, require, character.only=TRUE)
+
+```
+
+Below are the packages and their description which are used in our analysis:
+
+**dplyr**: Used for data manipulation
+
+**naniar**: To plot Missing values in the data.
+
+**ggplot2**: ggplot2 is a plotting system for R, based on the grammar of graphics
+
+**stringr**: used for character manipulation
+
+**ggrepel**: to Visualize the text labels used in ggplot better
+
+
+## 3. Data Preparation{.tabset}
+
+### 3.1 Data Scource
+```{r,warning=FALSE}
+# Scalable function to fetch data from a CSV
+getdata <- function(filename) {
+  df <-  read.csv(file=filename, header=TRUE, sep=",")
+  return(df)
+}
+# Datasets used for analysis
+air_bnb<-getdata(paste(path,file_airbnb,sep = "/"))
+zillow<-getdata(paste(path,file_zillow,sep = "/"))
+```
+
+**Observations:**
+
+  * We have an air_bnb dataset with dimensions: (rows)48895*106(columns) which has listings information like location, room types and price of each listings from 2019.
+  
+  * We have a zillow dataset with (rows)8962*262(columns) has values of historical median prices within that area from 1996 to 2017.
+
+  * We take one observation from viewing our data that time frame for both Datastes are different, The Air BNB Dataset is in 2019 (from the last_Scraped_date variable) and the final cost available in zillow dataset is from July 2017. In the below analysis we will be bringing the timelines to a similar range inorder to accurately calculate profitability.
+
+### 3.2 Data Cleaning
+```{r,warning=FALSE}
+#Handling NA values
+#There can be missing values which are not NA's so we are creating temporary dataset to check if such values exists.
+empty_as_na <- function(x){
+    if("factor" %in% class(x)) x <- as.character(x) # since ifelse wont work with factors
+    ifelse(as.character(x)!="", x, NA)
+}
+# transform all columns
+airbnb_abs<-air_bnb %>% mutate_each(funs(empty_as_na))
+zillow_abs<-zillow %>% mutate_each(funs(empty_as_na))
+# plotting variables with more than 20 % missing values
+gg_miss_var(airbnb_abs[,colMeans(is.na(airbnb_abs))>0.2], show_pct = TRUE)
+gg_miss_var(zillow_abs[,colMeans(is.na(zillow_abs))>0.2], show_pct = TRUE)
+# storing all the column names with any missing values for check any of the required variable needs to be changed.
+airbnb_miss <- names(which(colMeans(is.na(airbnb_abs))>0.2))
+zillow_miss <- names(which(colMeans(is.na(zillow_abs))>0.2))
+# we can ignore the above variables for future analysis since they have 
+# Here we need to remove special characters from theprice column
+air_bnb$price <- as.numeric(gsub("[$,]", "",air_bnb$price))
+```
+
+**Observations:**
+
+  * We can see there are multiple variables with more than 20% missing values, these can be ignored as they wont be useful for accurate analysis.
+
+  * We can see price column which is essential for our analysis, contains special characters which needs to be removed and the column converted to numeric values for further analysis.
+
+  * We can see multiple types of City name New york mention which can affect our analysis and needs to be corrected.
+
+  * There is one zip code value which is Null. since we don't have lot of information about the same we will delete the records with with missing zip code value.
+
+  * We can see zipcode 10013 for both brooklyn and Manahattan, So we have to further analyse which region is correct for this zipcode.(Point added as a data cleaning step after observing the same in exploratory data analysis)
+  
+  * We wont be correcting the special characters in any other price related columns, as they all have more than 20% Missing values in them, hence won't contribute towards accurate analysis.
+
+### 3.3 Data Merging
+```{r,warning=FALSE}
+# Before merging data we need to filter and modify certain rows from both datasets
+# given that the more profitable properties will have 2 bedrooms, modifying the same from listings file. The value can be changed for future analysis in UsConfig file.
+air_bnb_final <- air_bnb %>% filter(bedrooms %in% num_bed)
+# in zillow dataset we will select the one's in newyork city, the value can be changed for a different city in UsConfig file.
+zillow <- zillow %>% filter(City %in% zillow_city)
+# We have to select from zillow dataset Newyork properties, also there are many null values in the time series data in Zillow so we take the last 3 years to calculate the growth rate for each zipcode and other useful columns from zillow.
+zillow_final <- zillow[,c(1:7,(ncol(zillow)-36):ncol(zillow))]
+# While merging the group by should be of the same data type checking the same before merging
+zillow_final$RegionName <- factor(zillow_final$RegionName)
+# function for merging data for any 2 dataset with a column having different names in both of them.
+mergeData <- function(dataset1,dataset2,param1,param2){
+  combined_data <- merge(dataset1, dataset2, by.x = param1, by.y = param2)
+  return(combined_data)
+}
+profit_final <- mergeData(air_bnb_final,zillow_final,"zipcode","RegionName")
+# removing duplicate data
+profit_final <- profit_final[which(duplicated(profit_final) == F),]
+```
+
+**Actions Taken:**
+
+  * We have selected rows with 2 bedrooms in airbnb listings dataset as it was given as one of the assumptions for highly profitable investment.
+  
+  * We join both the datsets using the zipcode which is the common column (RegionName in zillow) in both.
+  
+  * We remove all the duplicated values from the merged dataset, Here we see no duplications.
+  
+  * we only take last 3 years cost value from zillow dataset as we would be using this to calculate the growth rate of cost in each zipcode to predict the cost in 2019 as we have been given the price in 2019(from last scraped date). Although we know the price dont change it make sense for both the datsets to be in a similar datframe for more accurate calculation.
+  
+  * We see that the zipcode in air_bnb dataset and RegionName in zillow dataset dont have same data type. So I have converted regionname to factor before merging.
+
+
+### 3.4 Summary of Variables
+```{r,warning=FALSE}
+# Selection of variables for calculating profitability and other important factors.
+Profit_Cal <-  profit_final %>% select(zipcode,neighbourhood_group_cleansed,price,review_scores_rating,
+                 SizeRank,last_scraped,latitude,longitude,(ncol(profit_final)-36):ncol(profit_final))
+# calculating growth rate (average growth rate for the last 3 years) per zipcode
+growth_final <- Profit_Cal %>% mutate(growth_2015 = ((Profit_Cal[,21]-Profit_Cal[,9])*100)/Profit_Cal[,9]) %>%
+  mutate(growth_2016 = ((Profit_Cal[,33]-Profit_Cal[,21])*100)/Profit_Cal[,21]) %>%
+  mutate(growth_2017 = ((Profit_Cal[,45]-Profit_Cal[,33])*100)/Profit_Cal[,33]) %>%
+  mutate(avg_growth = (growth_2015+growth_2016+growth_2017)/3) %>%
+         mutate(cost_2019=X2017.06*((100+avg_growth)/100)*((100+avg_growth)/100))
+```
+
+**Metadata created:**
+
+  * growth_2015: Growth Rate in 2015
+  
+  * growth_2016: Growth Rate in 2016
+  
+  * growth_2017: Growth rate in 2017
+  
+  * avg_growth: Average growth rate in 2015,2016,2017
+  
+  * cost_2019: Predicted Cost in 2019 (Since we see from last scraped date that price in listings.csv is from 2019)
+
+## 4. Exploratory Data Analysis{.tabset}
+
+### 4.1 Price distribution and Outlier detection
+```{r,warning=FALSE}
+# Distribution of price
+ggplot(growth_final, aes(x = growth_final$price)) +
+  geom_histogram()+ggtitle("Distribution of Price") + 
+  xlab("Price") + 
+  ylab("Count") +
+  theme(legend.position = "none",
+        plot.title = element_text(color = "black", size = 14, face = "bold", hjust = 0.5),
+        axis.title.y = element_text(),
+        axis.title.x = element_text(),
+        axis.ticks = element_blank())
+# Doing outlier detection per zipcode for price of properties:
+  ggplot(growth_final,aes(x = zipcode, y = price, fill = neighbourhood_group_cleansed)) +
+  geom_boxplot() +
+  ggtitle("Outliers Per Zipcode for Neighbourhood") + 
+  xlab("Zipcode") + 
+  ylab("Price") +
+  theme(plot.title = element_text(color = "black", size = 14, face = "bold", hjust = 0.5),
+        axis.title.y = element_text(),
+        axis.title.x = element_text(),
+        axis.ticks = element_blank(),
+        axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+**Observations:**
+
+  * We see that the distribution of price is skewed.
+  
+  * We see there are lot of Outliers Present Per zipcode in the listings prices.
+  
+**Actions:**
+
+  * We will consider only the median Prices per zipcode to avoid the outliers for the future analysis.
+
+
+### 4.2 Price of properties per Neighbourhood
+```{r,warning=FALSE}
+# plots function
+plot_Neighbourhood <- function(){
+  growth_final %>%
+  group_by(neighbourhood_group_cleansed) %>%
+  summarize(num_properties=n(),price=median(price)) %>%
+  arrange(desc(price)) %>%
+  ggplot(aes(x = reorder(neighbourhood_group_cleansed,price), y =   (price),fill=num_properties),na.rm = TRUE) +
+  geom_bar(stat = "identity")+
+  coord_flip() +
+  ggtitle("Price of Properties per Neighbourhood") + 
+  ylab("Price Of Properties") + xlab("Neighbourhood") +
+  theme(
+        plot.title = element_text(color = "black", size = 14, face = "bold", hjust = 0.5),
+        axis.title.y = element_text(),
+        axis.title.x = element_text(),
+        axis.ticks = element_blank())
+}
+# plot
+plot_Neighbourhood()
+# save the function for reusabilty (Called in Rshiny app)
+save(plot_Neighbourhood,file=paste(path,"plot_Neighbourhood.Rdata",sep = "/"))
+```
+
+**Observations:**
+
+  * We see that Manhattan has the largest median price of properties when we analyse per neighbourhood.
+  
+  * We see that Manhattan has the highest number of properties while Staten Island and Queens has the lowest Number.
+
+### 4.3 Plots of median price of properties per zipcode
+
+```{r,warning=FALSE}
+plot_Price <- function(){
+  growth_final %>%
+  group_by(zipcode) %>%
+  summarize(num_properties=n(),price=median(price)) %>%
+  arrange(desc(price)) %>%
+  ggplot(aes(x = reorder(zipcode,price), y = (price),fill=num_properties),na.rm = TRUE) +
+  geom_bar(stat = "identity")+
+  coord_flip() +
+  ggtitle("Median Price of Properties per Zipcode") + 
+  ylab("Price Of Properties") + xlab("Zipcode") +
+  theme(
+        plot.title = element_text(color = "black", size = 14, face = "bold", hjust = 0.5),
+        axis.title.y = element_text(),
+        axis.title.x = element_text(),
+        axis.ticks = element_blank())
+}
+#plot
+plot_Price()
+# save the function for reusabilty (Called in Rshiny app)
+save(plot_Price,file=paste(path,"plot_Price.RData",sep = "/"))
+```
+
+**Observations:**
+
+  * We see that pin codes 10013, 1011 are the ones with  highest median price among all the zipcodes, followed by 1036, 1032.
+  
+  * 10314 has the least median price among all the zipcodes.
+  
+### 4.4 Plots of cost of properties per zipcode
+```{r,warning=FALSE}
+plot_Cost <- function() {
+  growth_final %>%
+  group_by(zipcode,neighbourhood_group_cleansed) %>%
+  summarize(cost=sum(cost_2019)) %>%
+  arrange(desc(cost)) %>%
+  ggplot(aes(x = reorder(zipcode,cost), y = (cost),fill=neighbourhood_group_cleansed),na.rm = TRUE) +
+  geom_bar(stat = "identity")+
+  coord_flip() +
+  ggtitle("Cost of Properties per Neighbourhood") + 
+  ylab("Cost Of Properties") + xlab("Zipcode") +
+  theme(
+        plot.title = element_text(color = "black", size = 14, face = "bold", hjust = 0.5),
+        axis.title.y = element_text(),
+        axis.title.x = element_text(),
+        axis.ticks = element_blank())
+}
+#plot
+plot_Cost()
+# save the function for reusabilty (Called in Rshiny app)
+save(plot_Cost,file=paste(path,"plot_Cost.RData",sep = "/"))
+```
+
+**Observations:**
+
+  * Here we see that pin code 10013 has data from both brooklyn and Manhattan. Since majority of the listing are in manhattan and only 1 listings present in brooklyn we assume the brooklyn is an incorrect entry and we remove the entry of brooklyn.
+  
+  * Here we  see that zipcode 1003 in Manhattan Neighbourhood is the costliest zipcode, followed by 10011, 10036 while 11003 zipcode form queens is the cheapest.
+  
+**Action:**
+
+  * We will remove 10013 with entry of Brooklyn, from our further analysis since we cannot be sure which entry of Neighborhoods is correct for this zipcode with the given data without indepth analysis.
+  
+
+```{r,warning=FALSE}
+#removing 10013 for final analysis
+growth_final<-growth_final %>% filter (!(zipcode==10013 & neighbourhood_group_cleansed=="Brooklyn"))
+# Save the latest datset to be used for analysis in R shiny App.
+save(growth_final,file=paste(path,"Growth_Final.RData",sep = "/"))
+```
+
+## 5. Conclusion{.tabset}
+
+#### We will be Plotting 4 graphs :
+
+### 5.1 Breakeven point for properties per zipcode
+
+
+Here we are plotting the breakeven time required for all the zipcodes to recover the investment cost. The idea here is to understand which zipcode will be more profitable. Here we will be using the formula: Breakeven time = (cost) / (price x occupancy x availability)
+
+```{r,warning=FALSE}
+##Breakeven point for properties per zipcode
+plot_Profit<-function(Occupancy,availability){
+  growth_final %>%
+  group_by(zipcode,neighbourhood_group_cleansed) %>%
+  summarize(num_properties=n(),cost=median(cost_2019),price=median(price),
+             growth=median((avg_growth+100)/100),breakeven=((cost)/(price*Occupancy*availability)))%>%
+  arrange(desc(breakeven)) %>%
+  ggplot(aes(x = reorder(zipcode,breakeven), y =(breakeven),fill=neighbourhood_group_cleansed,label =round(breakeven)),na.rm = TRUE) +
+  geom_bar(stat = "identity")+
+  geom_text(hjust=1)+
+  coord_flip()+
+  ggtitle("Breakeven Time of Properties per Zipcode") + 
+  ylab("Breakeven Time (In Years)") + 
+  xlab("Zipcode") +
+  theme(
+        plot.title = element_text(color = "black", size = 14, face = "bold", hjust = 0.5),
+        plot.subtitle = element_text(color = "darkblue", hjust = 0.5),
+        axis.title.y = element_text(),
+        axis.title.x = element_text(),
+        axis.ticks = element_blank())
+}
+#plot
+plot_Profit(n_occ,n_avail)
+## save the function for reusabilty (Called in Rshiny app)
+save(plot_Profit,file=paste(path,"plot_Profit.RData",sep = "/"))
+```
+
+### 5.2 Breakeven Time of Properties Vs Price per Zipcode
+
+
+Here we are plotting the breakeven time against price to understand which zipcodes with similar breakeven time to invest in. The idea here is that more the price more the return on investment after the breakeven time.
+
+```{r}
+plot_Price_Breakeven_Based<-function(Occupancy,availability) {
+  growth_final %>%
+  group_by(zipcode,neighbourhood_group_cleansed) %>%
+  summarize(num_properties=n(),cost=median(cost_2019),price=median(price),
+             growth=round(median(avg_growth)),breakeven=((cost)/(price*Occupancy*availability)))%>%
+  arrange(desc(breakeven)) %>%
+ggplot(aes(x=price, y=breakeven, label=zipcode,fill=neighbourhood_group_cleansed)) +
+  geom_point(size=4, shape=23)+
+    geom_text_repel(point.padding = 0.25)+
+  ggtitle("Breakeven Time of Properties Vs Price per Zipcode") + 
+  ylab("Breakeven Time (In Years)") + xlab("Price") +
+  theme(plot.title = element_text(color = "black", size = 14, face = "bold", hjust = 0.5),
+        plot.subtitle = element_text(color = "darkblue", hjust = 0.5),
+        axis.title.y = element_text(),
+        axis.title.x = element_text(),
+        axis.ticks = element_blank())
+}
+#plot
+plot_Price_Breakeven_Based(n_occ,n_avail)
+# save the function for reusabilty (Called in Rshiny app)
+save(plot_Price_Breakeven_Based,file=paste(path,"plot_Price_Breakeven_Based.RData",sep = "/"))
+```
+
+### 5.3 Breakeven Time of Properties Vs Growth Rate Zipcode
+
+
+Here we are plotting the breakeven time against the average growth rate of each zipcode. This was calculated previously for each zipcode considering its cost trend of the past 3 years (From 06/2017). The idea here is to understand on a long term to conside the growth rate as a factor. Since there is not point in investing in a zipcode and neighbourhood having low growth rate in a long term.
+
+```{r}
+
+plot_Growth_Based<- function(Occupancy,availability) {
+  growth_final %>%
+  group_by(zipcode,neighbourhood_group_cleansed) %>%
+  summarize(num_properties=n(),cost=median(cost_2019),price=median(price),
+             growth=round(median(avg_growth)),breakeven=((cost)/(price*Occupancy*availability)))%>%
+  arrange(desc(breakeven)) %>%
+ggplot(aes(x=growth, y=breakeven, label=zipcode,fill=neighbourhood_group_cleansed)) +
+  geom_point(size=4, shape=23)+
+    geom_text_repel(point.padding = 0.25)+
+  ggtitle("BreakevenTime Vs Growth Rate Zipcode") + 
+  xlab("Growth Rate") + ylab("Breakeven Time") +
+  theme(
+        plot.title = element_text(color = "black", size = 14, face = "bold", hjust = 0.5),
+        axis.title.y = element_text(),
+        axis.title.x = element_text(),
+        axis.ticks = element_blank())
+}
+#plot
+plot_Growth_Based(n_occ,n_avail)
+# save the function for reusabilty (Called in Rshiny app)
+save(plot_Growth_Based,file=paste(path,"plot_Growth_Based.RData",sep = "/"))
+```
+
+### 5.4 Total profit per zipcode (After a given Number of Years)
+
+
+Here we can see the profits earned in thousands by different zipcodes ove different timelines.
+enter variable value for : num_years to get results for profits earned at a particular time period from 2019. We can also vary the occupancy and availability to siumulate different scenarios.
+
+```{r}
+plot_profit_in_years<- function(Occupancy,availability,num_years) {
+title_gg <- paste("Profit Earned in (Years): ",num_years)
+  growth_final %>%
+  group_by(zipcode,neighbourhood_group_cleansed) %>%
+  summarize(num_properties=n(),cost=median(cost_2019),price=median(price),
+             growth=median((avg_growth+100)/100),profit=((num_years*price*Occupancy*availability)-(cost))/1000)%>%
+  arrange(desc(profit)) %>%
+  ggplot(aes(x = reorder(zipcode,profit), y =(profit),fill=neighbourhood_group_cleansed),na.rm = TRUE) +
+  geom_bar(stat = "identity")+
+  geom_text(hjust=1,aes(label = paste0(round(profit),"K")))+
+  coord_flip()+
+  ggtitle(paste0(title_gg)) + 
+  ylab("Profit Amount In Thousands (K)") + 
+  xlab("Zipcode") +
+  theme(
+        plot.title = element_text(color = "black", size = 14, face = "bold", hjust = 0.5),
+        plot.subtitle = element_text(color = "darkblue", hjust = 0.5),
+        axis.title.y = element_text(),
+        axis.title.x = element_text(),
+        axis.ticks = element_blank())
+}
+plot_profit_in_years(n_occ,n_avail,n_year)
+# save the function for reusabilty (Called in Rshiny app)
+save(plot_profit_in_years,file=paste(path,"plot_profit_in_years.RData",sep = "/"))
+
+```
+
+### 5.5 Summary
+
+**Observations:**
+
+  * We can see that Staten island is the best neighbourhood to invest in with all zipcodes having the least breakeven time, followed by queens.
+  
+  * I would recommend to invest in zipcode 10306 in staten island followed by 11434 in queens and 10303 in staten island purely on the breakeven time basis. 10306 will be the first zipcode in new york city which will give profits.
+  
+  * Although with new considerations like Price and growth rate I would rather invest in 11434 in queens which has the highest growth rate and relatively higher priced compared to 10306. This would be a slightly long term recommendation.
+  
+  * We can check zipcodes with maximum profit earned at different timelines (results used from the shiny app and from 5.4) at 15 and 20 years: zipcode 10306 (Staten Island) at 25 years: zipcode 11434 (Queens) and at 30 years: zipcode 10036 (Manhattan) has the maximum profit. We can use input to the reusable function plot_profit_in_years(Occupancy,availability,num_years), in config file to change the years to get a clear view on profitability of different zipcodes at different timelines.
+
+### 5.6 Improvement Suggestions
+
+  * R shiny Application:
+
+    * Along with the code I have also added an R shiny application. This basic interactive application will give a user interface for viewing various plots for helping users take appropriate decision on which property to buy.
+  
+    * As mentioned I have only provided a basic form with a MAP and interactive Interface for viewing various plots. This can be developed into a full fledged application that can provide an easier avenue for the client to view and take decision.
+
+  * We have taken various assumption which can be translated into various analytical methods for increasing the accuracy of the final breakeven point calculation and for more accurate decision making. Some of them being:
+
+    * The zip code which was empty can actually be imputed using langitude and longitude and Neighbouhood_group cleansed information provided and be used in the final analysis.
+  
+    * The zip code which had properties listed in both Manahatten and Brooklyn can be corrected instead of being ignored in the final analysis using the langitude and longitude or other factors like number of listings per neighbourhood can also be used.
+  
+  * We can improve the accuracy of the cost value prediction in 2019 using Time series methodology, which can provide a further accurate breakeven period for each zipcode instead of using average growth rate for the past 3 years to calculate the cost in 2019. 
+
+  * Instead of taking the Median Price per zipcode for removing the outliers, here we could have done further analysis to improve the accuracy of price per zipcode by taking the 95 percentile value instead of median for further accurate results.
+
+  * Calculation of growth rate can be made scalable using further analysis (On the basis of number of past years).
